@@ -15,6 +15,16 @@ Filter2Noise is a novel framework that combines the interpretability of bilatera
 - **Self-Supervised**: No clean reference images needed for training
 - **User Control**: Post-training adjustment of filter parameters for region-specific denoising
 
+## Results
+
+Our method achieves excellent denoising performance while maintaining image quality:
+
+![Denoising Results with Metrics](results_with_metrics_pixel.png)
+
+The adaptability of our filter parameters across different stages:
+
+![Filter Parameters Across Stages](sigmas_all_stages.png)
+
 ## Installation
 
 ```bash
