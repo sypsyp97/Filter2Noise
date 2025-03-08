@@ -481,11 +481,20 @@ class SigmaPredictor(nn.Module):
         patches = patches.permute(0, 2, 4, 1, 3, 5).contiguous()
         patches = patches.view(b, (h // ps) * (w // ps), -1)
 
-        # Attention-based feature encoding
-        feats = self._compute_attention(patches)
+        # Feature attention
+        q_main = self.query(patches)
+        k_main = self.key(patches)
+        v_main = self.value(patches)
+        feats = self._attention(q_main, k_main, v_main)
 
-        # Predict sigma channels
-        sigmas = self._predict_sigmas(feats)  # [B, (H_p*W_p), 3]
+        # Sigma attention
+        q_sigma = self.sigma_query(feats)
+        k_sigma = self.sigma_key(feats)
+        v_sigma = self.sigma_value(feats)
+        sigmas_patch = self._attention(q_sigma, k_sigma, v_sigma)
+        sigmas_patch_norm = self.norm(sigmas_patch)
+        sigmas_patch_proj = self.sigma_proj(sigmas_patch_norm)
+        sigmas = self.activation(sigmas_patch_proj)  # [B, N, 3]
 
         # Reshape -> [B, 3, H//ps, W//ps]
         sigmas = sigmas.view(b, h // ps, w // ps, 3).permute(0, 3, 1, 2)
@@ -722,13 +731,7 @@ class LossFunction:
 
     def __call__(self, noisy_input, model, alpha=None):
         """
-        Calculate the self-supervised loss on the given noisy image and model.
-
-        Components of the loss:
-          1) Multi-scale consistency: by comparing downsampled pairs (scale1 vs scale2).
-          2) Cross-scale consistency: comparing denoised versions of the same image
-             at different scales.
-          3) Edge preservation: L1 loss on DoG-filtered images.
+        Calculate the self-supervised loss on the given noisy image and model outputs.
 
         Args:
             noisy_input (torch.Tensor): A noisy image of shape (B, C, H, W).
