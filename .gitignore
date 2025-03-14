@@ -177,3 +177,9 @@ cython_debug/
 *.bmp
 *.gif
 *.webp
+
+#   Gradio creates a temporary directory for storing files, which is not needed to be
+#   version controlled.  This is especially important for large files, such as images,
+#   audio, and video files.
+#   https://gradio.app/docs/#temporary-files
+.gradio/

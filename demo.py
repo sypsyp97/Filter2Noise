@@ -569,4 +569,4 @@ class InteractiveDenoiseInterface:
 if __name__ == "__main__":
     app = InteractiveDenoiseInterface() # Create instance of the interface class.
     interface = app.create_interface() # Create the Gradio interface.
-    interface.launch() # Launch the Gradio interface.
+    interface.launch(share=False) # Set share=True to enable public sharing.
