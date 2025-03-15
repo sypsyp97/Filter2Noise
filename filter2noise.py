@@ -422,7 +422,7 @@ class SigmaPredictor(nn.Module):
         attention_scale (float): Scale factor for scaled dot-product attention.
     """
 
-    def __init__(self, patch_size=8, in_channels=1):
+    def __init__(self, patch_size=8):
         """
         Args:
             patch_size (int, optional): Patch size for non-overlapping patches. Defaults to 8.
@@ -517,14 +517,14 @@ class AGBF(nn.Module):
     """
     _cached_grids = {}
 
-    def __init__(self, patch_size=16, in_channels=1):
+    def __init__(self, patch_size=16):
         """
         Args:
             patch_size (int, optional): Patch size for the SigmaPredictor. Defaults to 16.
             in_channels (int, optional): Number of input channels. Defaults to 1.
         """
         super().__init__()
-        self.sigma_predictor = SigmaPredictor(patch_size=patch_size, in_channels=in_channels)
+        self.sigma_predictor = SigmaPredictor(patch_size=patch_size)
 
     def compute_spatial_kernel(self, sx, sy, k, device):
         """
@@ -643,7 +643,7 @@ class DenoisingPipeline(nn.Module):
         stages (nn.ModuleList): A list of AGBF stages.
     """
 
-    def __init__(self, num_stages=2, patch_size=8, in_channels=1):
+    def __init__(self, num_stages=2, patch_size=8):
         """
         Args:
             num_stages (int, optional): Number of AGBF stages in the pipeline. Defaults to 2.
@@ -652,7 +652,7 @@ class DenoisingPipeline(nn.Module):
         """
         super().__init__()
         self.stages = nn.ModuleList(
-            [AGBF(patch_size=patch_size, in_channels=in_channels) for _ in range(num_stages)]
+            [AGBF(patch_size=patch_size) for _ in range(num_stages)]
         )
 
     def forward(self, x, return_sigmas=False):
@@ -815,7 +815,7 @@ def train_model(model, noisy, loss_function, optimizer, scheduler, epochs=500):
 #                         Metrics and Data Loading                            #
 ###############################################################################
 
-def compute_metrics(image, noisy_image, denoised_image, in_channels, device):
+def compute_metrics(image, noisy_image, denoised_image, in_channels):
     """
     Compute PSNR and SSIM metrics for noisy and denoised images relative to the reference.
 
@@ -824,7 +824,6 @@ def compute_metrics(image, noisy_image, denoised_image, in_channels, device):
         noisy_image (np.ndarray): The noisy image in [0,1].
         denoised_image (np.ndarray): The denoised image in [0,1].
         in_channels (int): The number of channels (e.g., 1 for grayscale, 3 for RGB).
-        device (torch.device): The device (not directly used here).
 
     Returns:
         dict: Contains 'psnr_noisy', 'psnr_denoised', 'ssim_noisy', and 'ssim_denoised'.
@@ -905,7 +904,7 @@ def main():
     noisy = prepare_image(noisy_image, device)
 
     # Initialize model and training utilities
-    model = DenoisingPipeline(num_stages=2, patch_size=8, in_channels=in_channels).to(device)
+    model = DenoisingPipeline(num_stages=2, patch_size=8).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     scheduler = OneCycleLR(optimizer, max_lr=0.001, epochs=500, steps_per_epoch=1)
     loss_function = LossFunction(device, lambda_=400)
@@ -930,7 +929,7 @@ def main():
     logger.info(f"Inference time: {inference_time:.4f} seconds")
 
     # Compute and print metrics
-    metrics = compute_metrics(image, noisy_image, denoised_image, in_channels, device)
+    metrics = compute_metrics(image, noisy_image, denoised_image, in_channels)
     for key, value in metrics.items():
         logger.info(f"{key}: {value:.4f}")
 
