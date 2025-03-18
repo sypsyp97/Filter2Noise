@@ -551,6 +551,9 @@ class AGBF(nn.Module):
             AGBF._cached_grids[k] = (x_coords, y_coords)
         else:
             x_coords, y_coords = AGBF._cached_grids[k]
+            if x_coords.device != device:
+                x_coords = x_coords.to(device)
+                y_coords = y_coords.to(device)
 
         b, h, w = sx.shape
         sx_expanded = sx.view(b, h, w, 1, 1)
@@ -604,7 +607,7 @@ class AGBF(nn.Module):
         sr = s[..., 2]
 
         # Determine kernel size dynamically
-        m = max(sx.max().item(), sy.max().item())
+        m = torch.max(sx.max(), sy.max()).item()
         k = int(2 * math.ceil(m) + 1)
         if k % 2 == 0:
             k += 1
@@ -612,7 +615,7 @@ class AGBF(nn.Module):
 
         # Pad the input
         xp = F.pad(x, (p, p, p, p), mode='reflect')
-        patches = xp.unfold(2, k, 1).unfold(3, k, 1).contiguous().view(b, c, h, w, -1)
+        patches = F.unfold(xp, kernel_size=k, stride=1).view(b, c, k*k, h, w).permute(0, 1, 3, 4, 2)
 
         # Compute spatial kernel
         spatial_kernel = self.compute_spatial_kernel(sx, sy, k, x.device)
@@ -628,7 +631,8 @@ class AGBF(nn.Module):
         normalized_kernel = combined_kernel / (norm_factor + 1e-8)
 
         # Apply filter
-        output = (patches * normalized_kernel).sum(dim=-1)
+        patches.mul_(normalized_kernel)
+        output = patches.sum(dim=-1)
 
         if return_sigmas:
             return output, s
