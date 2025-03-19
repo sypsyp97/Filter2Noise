@@ -119,7 +119,7 @@ def restore_image(tensor):
 
 def Downsampler(img):
     """
-    Downsample an image into two outputs using fixed 2x2 stride-2 convolutions.
+    Downsample an image into two outputs using fixed 2x2 stride-2 convolutions optimized by a single convolution.
 
     Two specific 2x2 filters are applied to create two separate downsampled images,
     helping to retain different local structure information.
@@ -133,13 +133,16 @@ def Downsampler(img):
     c = img.shape[1]
     device = img.device
 
-    filter1 = torch.FloatTensor([[[[0, 0.5],
-                                   [0.5, 0]]]]).to(device).repeat(c, 1, 1, 1)
-    filter2 = torch.FloatTensor([[[[0.5, 0],
-                                   [0, 0.5]]]]).to(device).repeat(c, 1, 1, 1)
+    # Define filters with the same dtype as input and on the correct device
+    f1 = torch.tensor([[[[0, 0.5],
+                         [0.5, 0]]]], dtype=img.dtype, device=device).expand(c, -1, -1, -1)
+    f2 = torch.tensor([[[[0.5, 0],
+                         [0, 0.5]]]], dtype=img.dtype, device=device).expand(c, -1, -1, -1)
 
-    output1 = F.conv2d(img, filter1, stride=2, groups=c)
-    output2 = F.conv2d(img, filter2, stride=2, groups=c)
+    # Stack filters along the output channel dimension and perform convolution in one call
+    kernel = torch.cat([f1, f2], dim=0)  # shape (2*c, 1, 2, 2)
+    conv_out = F.conv2d(img, kernel, stride=2, groups=c)
+    output1, output2 = conv_out.chunk(2, dim=1)
     return output1, output2
 
 
