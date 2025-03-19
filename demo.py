@@ -11,7 +11,8 @@ from filter2noise import (
 )
 import pydicom
 import os
-from dataclasses import dataclass
+import matplotlib.pyplot as plt
+from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Dict
 
 # Fix the seed for reproducibility
@@ -44,7 +45,7 @@ class DenoiseState:
     sigmas_list: Optional[List[torch.Tensor]] = None
     current_stage_index: int = 0  # Track which stage we're modifying
     current_sigma_index: int = 2  # Default to sigma_r
-    original_sigma_maps: Dict[Tuple[int, int], np.ndarray] = None  # Store original sigmas for visualization
+    original_sigma_maps: Dict[Tuple[int, int], np.ndarray] = field(default_factory=dict)  # Store original sigmas for visualization
 
 
 class InteractiveDenoiseInterface:
@@ -114,11 +115,14 @@ class InteractiveDenoiseInterface:
         if len(img_array.shape) == 3:
             img_array = np.mean(img_array[:, :, :3], axis=2) # Convert color image to grayscale by averaging RGB channels.
 
-        if img_array.max() > 1.0:
-            img_array = img_array / 255.0 # Normalize to [0, 1] if pixel values are in [0, 255] range.
-
-        if img_array.max() != img_array.min():
-            img_array = (img_array - img_array.min()) / (img_array.max() - img_array.min()) # Normalize to [0, 1] if not already normalized.
+        # Use min-max normalization
+        img_min = img_array.min()
+        img_max = img_array.max()
+        if img_max > 1.0:
+            img_array = img_array / 255.0
+            img_min, img_max = img_array.min(), img_array.max()
+        if img_max != img_min:
+            img_array = (img_array - img_min) / (img_max - img_min)
 
         return img_array.astype(np.float32)
 
@@ -135,7 +139,6 @@ class InteractiveDenoiseInterface:
         Returns:
             numpy.ndarray: RGB image (numpy array) representing the colormap visualization of the sigma array.
         """
-        import matplotlib.pyplot as plt
         if sigma_array.min() == sigma_array.max():
             return np.zeros((*sigma_array.shape, 3), dtype=np.uint8) # Return black image if sigma array is constant.
 
@@ -208,7 +211,7 @@ class InteractiveDenoiseInterface:
                 - Gradio Dropdown update object for stage selector, populated with stage names.
                 - Gradio Dropdown update object for sigma type selector, set to default sigma_r.
         """
-        file_path = input_file.name if hasattr(input_file, 'name') else input_file # Extract file path from Gradio File object.
+        file_path = getattr(input_file, 'name', input_file) # Extract file path from Gradio File object.
         progress(0, desc="Preprocessing image...")
         processed_image = self.preprocess_image(file_path) # Preprocess the input image.
         input_display = (processed_image * 255).astype(np.uint8) # Prepare input image for display (scaled to 0-255).
