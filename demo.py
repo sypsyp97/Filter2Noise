@@ -1,6 +1,5 @@
 import gradio as gr
 import torch
-import torch.nn.functional as F
 import numpy as np
 import random
 from filter2noise import (
@@ -341,16 +340,13 @@ class InteractiveDenoiseInterface:
         x2 = min(sigma_width, int(x2)) # Clip x2 to be within image bounds.
         y2 = min(sigma_height, int(y2)) # Clip y2 to be within image bounds.
 
-        mask = np.zeros((sigma_height, sigma_width), dtype=bool) # Create a mask for the bounding box region.
-        mask[y1:y2, x1:x2] = True # Set mask to True within the bounding box.
-        mask_tensor = torch.from_numpy(mask).to(self.state.device) # Convert mask to tensor and move to device.
-
-        with torch.no_grad(): # Disable gradient calculation.
-            stage_sigmas = self.state.sigmas_list[stage_idx].to(self.state.device) # Get current stage's sigma tensor.
-            current_values = stage_sigmas[0, :, :, sigma_idx] # Get current sigma values for selected sigma type.
-            adjustment = current_values * (adjustment_factor - 1.0) # Calculate the adjustment value.
-            stage_sigmas[0, :, :, sigma_idx][mask] = current_values[mask] + adjustment[mask] # Apply adjustment to sigma values within the mask.
-            stage_sigmas.clamp_(min=1e-6) # Clamp sigma values to a minimum value to prevent numerical issues.
+        with torch.no_grad(): # Optimize sigma adjustment by direct slicing.
+            stage_sigmas = self.state.sigmas_list[stage_idx].to(self.state.device)
+            # Directly slice the region defined by the bounding box.
+            current_region = stage_sigmas[0, y1:y2, x1:x2, sigma_idx]
+            adjustment = current_region * adjustment_factor
+            stage_sigmas[0, y1:y2, x1:x2, sigma_idx] = current_region + adjustment
+            stage_sigmas.clamp_(min=1e-6)
 
         updated_output = self.update_denoised_output_external() # Update denoised output with modified sigma maps.
         updated_sigma = self.state.sigmas_list[stage_idx][0, :, :, sigma_idx].cpu().numpy() # Get updated sigma map as numpy array.
