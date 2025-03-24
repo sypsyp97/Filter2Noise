@@ -183,3 +183,17 @@ cython_debug/
 #   audio, and video files.
 #   https://gradio.app/docs/#temporary-files
 .gradio/
+
+# Roo memory bank
+.vscode
+/memory-bank
+.rooignore
+
+# Cline configuration file
+.clinerules-architect
+.clinerules-ask
+.clinerules-code
+.clinerules-debug
+.clinerules-test
+.roomodes
+projectBrief.md
