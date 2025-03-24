@@ -73,4 +73,4 @@ L_\text{total} = L_\text{rec} + \lambda \cdot L_\text{reg}
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is open source and available under the [Creative Commons Attribution-NonCommercial 4.0 International License](LICENSE).
