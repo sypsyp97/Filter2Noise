@@ -3,20 +3,17 @@
 # Filter2Noise: Interpretable Self-Supervised Single Low-Dose CT Image Denoising
 
 <!-- Optional: Add a Table of Contents here if desired -->
-<!--
+
 ## Table of Contents
 - [Abstract](#abstract)
 - [Method Overview](#method-overview)
 - [Key Features](#key-features)
-- [Results](#results)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Codebase Structure](#codebase-structure)
 - [Important Parameters](#important-parameters)
 - [Citation](#citation)
-- [Contributing](#contributing)
 - [License](#license)
--->
+
 
 ## Abstract
 
@@ -64,18 +61,6 @@ The interactive demo allows you to:
 -   Visualize the predicted filter parameters (σx, σy, σr).
 -   Adjust filter parameters in specific regions using interactive controls.
 -   See real-time updates of the denoised result.
-
-## Codebase Structure
-
--   **`filter2noise.py`**: Core implementation of the Filter2Noise framework.
-    -   `SigmaPredictor`: Lightweight attention module that predicts filter parameters.
-    -   `AGBF`: Attention-Guided Bilateral Filter implementation.
-    -   `DenoisingPipeline`: Multi-stage denoising pipeline.
-    -   `LossFunction`: Self-supervised loss combining multi-scale consistency with edge preservation.
--   **`demo.py`**: Interactive Gradio interface for visualizing and adjusting filter parameters.
--   **`requirements.txt`**: Required Python dependencies.
--   **`LICENSE`**: Project license file.
--   **`README.md`**: This file.
 
 ## Important Parameters
 
