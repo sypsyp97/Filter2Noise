@@ -43,6 +43,7 @@ pip install -r requirements.txt
 
 ### Basic Denoising
 
+**Important:** Ensure your input CT image is normalized to the range [0, 1] before processing.
 Run the main script to apply the denoising pipeline:
 
 ```bash
