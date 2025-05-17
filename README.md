@@ -1,6 +1,6 @@
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/13bIhK2inxzjLfUUoLoltnAodFKb_YzXb?usp=sharing) [![arXiv](https://img.shields.io/badge/arXiv-2504.13519-b31b1b.svg)](https://arxiv.org/abs/2504.13519)
 [![Hugging Face Paper](https://img.shields.io/badge/🤗%20Hugging%20Face-Paper-yellow)](https://huggingface.co/papers/2504.13519)
-[![DeepWiki](https://img.shields.io/badge/DeepWiki-View%20on%20DeepWiki-blue)](https://deepwiki.com/sypsyp97/Filter2Noise)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sypsyp97/Filter2Noise)
 
 
 # Filter2Noise: Interpretable Self-Supervised Single Low-Dose CT Image Denoising
