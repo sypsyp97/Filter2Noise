@@ -433,7 +433,7 @@ class SigmaPredictor(nn.Module):
         """
         super().__init__()
         self.patch_size = patch_size
-        self.hidden_dim = 16  # Increased for better Mamba performance
+        self.hidden_dim = 8
         
         # Project patches to hidden dimension
         self.feature_proj = nn.LazyLinear(self.hidden_dim)
