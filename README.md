@@ -2,7 +2,7 @@
 [![Hugging Face Paper](https://img.shields.io/badge/🤗%20Hugging%20Face-Paper-yellow)](https://huggingface.co/papers/2504.13519)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sypsyp97/Filter2Noise)
 
-# Filter2Noise: Interpretable Self-Supervised Single Low-Dose CT Image Denoising
+# Filter2Noise: A Framework for Interpretable and Zero-Shot Low-Dose CT Image Denoising
 
 <!-- Optional: Add a Table of Contents here if desired -->
 
