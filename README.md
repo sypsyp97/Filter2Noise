@@ -23,6 +23,12 @@
 >Noise in low-dose computed tomography (LDCT) can obscure important diagnostic details. While deep learning offers powerful denoising, supervised methods require impractical paired data, and self-supervised alternatives often use opaque, parameter-heavy networks that limit clinical trust. We propose Filter2Noise (F2N), a novel self-supervised framework for interpretable, zero-shot denoising from a single LDCT image. Instead of a black-box network, its core is an Attention-Guided Bilateral Filter, a transparent, content-aware mathematical operator. A lightweight attention module predicts spatially varying filter parameters, making the process transparent and allowing interactive radiologist control. To learn from a single image with correlated noise, we introduce a multi-scale self-supervised loss coupled with Euclidean Local Shuffle (ELS) to disrupt noise patterns while preserving anatomical integrity. On the Mayo Clinic LDCT Challenge, F2N achieves state-of-the-art results, outperforming competing zero-shot methods by up to 3.68 dB in PSNR. It accomplishes this with only 3.6k parameters, orders of magnitude fewer than competing models, which accelerates inference and simplifies deployment. By combining high performance with transparency, user control, and high parameter efficiency, F2N offers a trustworthy solution for LDCT enhancement. We further demonstrate its applicability by validating it on clinical photon-counting CT data.
 ## News
 
+📢 **2026-03**: We have added an xLSTM-based variant of Filter2Noise based on the official xLSTM implementation.
+
+- **New experimental implementation**: See `filter2noise_xlstm.py` for the xLSTM-based sigma predictor
+- **Fair comparison setting**: The xLSTM variant is configured to match the same overall Filter2Noise pipeline and training protocol used by the attention and Mamba versions
+- **Current conclusion**: In our preliminary tests, the xLSTM variant still underperforms the original lightweight attention-based predictor in both denoising quality and sigma-map stability
+
 📢 **2025-07**: We have implemented a Mamba-based variant of Filter2Noise as an experimental alternative to the attention mechanism. However, preliminary results show that:
 
 - **More parameters**: The Mamba implementation uses significantly more parameters (~8x increase) compared to the lightweight attention-based approach
@@ -46,6 +52,12 @@
 pip install -r requirements.txt
 ```
 
+The repository now contains three predictor backbones:
+
+- `filter2noise.py`: original lightweight attention-based version
+- `filter2noise_mamba.py`: experimental Mamba-based version
+- `filter2noise_xlstm.py`: experimental xLSTM-based version
+
 ## Usage
 
 ### Basic Denoising
@@ -56,6 +68,15 @@ Run the main script to apply the denoising pipeline:
 ```bash
 python filter2noise.py
 ```
+
+For the experimental backbones, run:
+
+```bash
+python filter2noise_mamba.py
+python filter2noise_xlstm.py
+```
+
+At the moment, we recommend `filter2noise.py` for the main method and for the strongest performance/efficiency trade-off. The Mamba and xLSTM variants are provided as research baselines and implementation references.
 
 ### Interactive Demo
 
