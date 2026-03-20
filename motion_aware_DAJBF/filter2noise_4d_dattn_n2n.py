@@ -774,7 +774,7 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
             ssim_d = ssim(clean_slice, denoised_slice, data_range=1.0)
 
             fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-            fig.suptitle(f'DA-JBF N2N  z={z}, t={t_mid}  ({TRAIN_FRACTION*100:.0f}%)', fontsize=16)
+            fig.suptitle(f'DA-JBF  z={z}, t={t_mid}', fontsize=16)
             axes[0, 0].imshow(np.rot90(clean_slice, k=-1), cmap='gray', vmin=0, vmax=1)
             axes[0, 0].set_title('Clean'); axes[0, 0].axis('off')
             axes[0, 1].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', vmin=0, vmax=1)
@@ -801,7 +801,7 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
             plt.close()
 
             fig, axes = plt.subplots(1, 4, figsize=(24, 5))
-            fig.suptitle(f'DA-JBF N2N Sigma Maps  z={z}, t={t_mid}', fontsize=14)
+            fig.suptitle(f'DA-JBF Sigma Maps  z={z}, t={t_mid}', fontsize=14)
             axes[0].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', vmin=0, vmax=1)
             axes[0].set_title('Input (Noisy)'); axes[0].axis('off')
             for ax, data, label in zip(axes[1:], [sx, sy, sr],
@@ -820,7 +820,7 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
             offset_mag = np.sqrt(off_dx ** 2 + off_dy ** 2).mean(axis=0)
 
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
-            fig.suptitle(f'DA-JBF N2N Offsets  z={z}, t={t_mid}', fontsize=14)
+            fig.suptitle(f'DA-JBF Offsets  z={z}, t={t_mid}', fontsize=14)
 
             im0 = axes[0].imshow(np.rot90(offset_mag, k=-1), cmap='magma')
             axes[0].set_title('Mean offset magnitude (px)'); axes[0].axis('off')
@@ -863,27 +863,46 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
     logger.info(f"Saved sigma maps and offsets to {sigma_dir}/")
 
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Motion-aware DA-JBF for 4D CT denoising")
+    parser.add_argument('--clean', type=str, required=True, help='Path to clean 4D volume (HDF5)')
+    parser.add_argument('--noisy', type=str, required=True, help='Path to noisy 4D volume (HDF5)')
+    parser.add_argument('--output', type=str, default='denoised_4d.h5', help='Output denoised volume path')
+    parser.add_argument('--output-dir', type=str, default='output_4d', help='Output directory for figures and metrics')
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--weight-decay', type=float, default=0.01)
+    parser.add_argument('--gamma-max', type=float, default=2.0)
+    parser.add_argument('--train-fraction', type=float, default=TRAIN_FRACTION)
+    parser.add_argument('--seed', type=int, default=77)
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     setup_logger()
-    device = setup_environment()
+    device = setup_environment(seed=args.seed)
 
-    clean_path = 'case2_4d_clean_norm_leap.h5'
-    noisy_path = 'case2_4d_noisy_projdomain_leap.h5'
-    output_path = 'denoised_4d_dattn_n2n_leap.h5'
-    output_figures = 'enhanced_output_dattn_n2n_leap'
+    clean_path = args.clean
+    noisy_path = args.noisy
+    output_path = args.output
+    output_figures = args.output_dir
 
-    epochs = 100
-    batch_size = 16
-    lr = 0.001
-    weight_decay = 0.01
+    epochs = args.epochs
+    batch_size = args.batch_size
+    lr = args.lr
+    weight_decay = args.weight_decay
 
     reg_config = dict(num_scales=3, num_iters=50, sigma_fluid=2.0,
                       sigma_diffusion=1.5, sigma_presmooth=1.5, sigma_range=0.1)
 
-    gamma_max = 2.0
+    gamma_max = args.gamma_max
+    train_fraction = args.train_fraction
 
-    logger.info("DA-JBF N2N (Deformable Attention + Regularized N2N Loss, D -> mc_avg)")
-    logger.info(f"Training on {TRAIN_FRACTION*100:.0f}% of data")
+    logger.info("DA-JBF (Deformable Attention-Guided Joint Bilateral Filter) for 4D CT")
+    logger.info(f"Training on {train_fraction*100:.0f}% of data")
 
     if not os.path.exists(clean_path) or not os.path.exists(noisy_path):
         logger.error("Missing input files.")
@@ -897,7 +916,7 @@ def main():
 
     all_valid_zt = [(z, t) for z in range(z_dim) for t in range(1, t_dim - 1)]
     n_total = len(all_valid_zt)
-    n_train = max(1, int(n_total * TRAIN_FRACTION))
+    n_train = max(1, int(n_total * train_fraction))
     rng = np.random.default_rng(42)
     train_zt = [all_valid_zt[i] for i in rng.choice(n_total, size=n_train, replace=False)]
     logger.info(f"Selected {n_train}/{n_total} (z,t) pairs for training")
@@ -950,7 +969,7 @@ def main():
     ensure_dir(metrics_dir)
 
     with open(os.path.join(metrics_dir, 'overall_metrics.txt'), 'w') as f:
-        f.write(f"DA-JBF Reg-N2N D->mc_avg gamma={gamma_max} (LEAP) - {TRAIN_FRACTION*100:.0f}% training\n{'='*60}\n\n")
+        f.write(f"DA-JBF gamma={gamma_max} - {train_fraction*100:.0f}% training\n{'='*60}\n\n")
         for label, m in [("NOISY", noisy_4d), ("DENOISED", denoised_4d)]:
             f.write(f"{label}: PSNR={m['PSNR']:.4f} dB, SSIM={m['SSIM']:.6f}, RMSE={m['RMSE']:.6f}\n")
         f.write(f"\nMotion time: {motion_time:.2f}s\nTraining time: {train_time:.2f}s\n")

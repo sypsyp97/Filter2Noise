@@ -22,27 +22,25 @@ The code expects 4D volumes stored as HDF5 files with a `volume` dataset of shap
 ## Usage
 
 ```bash
-python filter2noise_4d_dattn_n2n.py
+python filter2noise_4d_dattn_n2n.py \
+    --clean path/to/clean_volume.h5 \
+    --noisy path/to/noisy_volume.h5 \
+    --output denoised_4d.h5 \
+    --output-dir output_4d
 ```
 
-By default, the script looks for:
-- `case2_4d_clean_norm_leap.h5` - clean reference volume (for evaluation)
-- `case2_4d_noisy_projdomain_leap.h5` - noisy input volume
-
-Outputs:
-- `denoised_4d_dattn_n2n_leap.h5` - denoised 4D volume
-- `enhanced_output_dattn_n2n_leap/` - visualizations, sigma maps, offset maps, and per-slice metrics
-
-## Key Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `TRAIN_FRACTION` | 0.10 | Fraction of (z, t) pairs used for training |
-| `epochs` | 100 | Number of training epochs |
-| `hidden_dim` | 16 | Hidden dimension for the sigma predictor |
-| `num_sample_points` | 25 | Number of sampling points in the bilateral filter kernel |
-| `gamma_max` | 2.0 | Maximum regularization weight for the self-supervised loss |
-| `num_scales` | 3 | Number of pyramid scales for Demons registration |
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--clean` | *(required)* | Path to clean 4D volume (HDF5, for evaluation) |
+| `--noisy` | *(required)* | Path to noisy 4D volume (HDF5) |
+| `--output` | `denoised_4d.h5` | Output denoised volume path |
+| `--output-dir` | `output_4d` | Output directory for figures and metrics |
+| `--epochs` | 100 | Number of training epochs |
+| `--batch-size` | 16 | Training batch size |
+| `--lr` | 0.001 | Learning rate |
+| `--gamma-max` | 2.0 | Maximum regularization weight for the self-supervised loss |
+| `--train-fraction` | 0.10 | Fraction of (z, t) pairs used for training |
+| `--seed` | 77 | Random seed |
 
 ## Requirements
 
