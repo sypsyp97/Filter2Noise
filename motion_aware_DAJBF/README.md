@@ -22,7 +22,7 @@ The code expects 4D volumes stored as HDF5 files with a `volume` dataset of shap
 ## Usage
 
 ```bash
-python filter2noise_4d_dattn_n2n.py \
+python filter2noise_4d_dajbf.py \
     --clean path/to/clean_volume.h5 \
     --noisy path/to/noisy_volume.h5 \
     --output denoised_4d.h5 \
