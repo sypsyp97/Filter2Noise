@@ -1,8 +1,11 @@
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/13bIhK2inxzjLfUUoLoltnAodFKb_YzXb?usp=sharing) [![arXiv](https://img.shields.io/badge/arXiv-2504.13519-b31b1b.svg)](https://arxiv.org/abs/2504.13519)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/13bIhK2inxzjLfUUoLoltnAodFKb_YzXb?usp=sharing) [![DOI](https://img.shields.io/badge/DOI-10.1117%2F1.JMI.13.2.024004-blue.svg)](https://doi.org/10.1117/1.JMI.13.2.024004) [![arXiv](https://img.shields.io/badge/arXiv-2504.13519-b31b1b.svg)](https://arxiv.org/abs/2504.13519)
 [![Hugging Face Paper](https://img.shields.io/badge/🤗%20Hugging%20Face-Paper-yellow)](https://huggingface.co/papers/2504.13519)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sypsyp97/Filter2Noise)
 
 # Filter2Noise: A Framework for Interpretable and Zero-Shot Low-Dose CT Image Denoising
+
+**Published in the Journal of Medical Imaging, 13(2):024004, 2026.**  
+[Paper](https://doi.org/10.1117/1.JMI.13.2.024004) · [arXiv](https://arxiv.org/abs/2504.13519)
 
 <!-- Optional: Add a Table of Contents here if desired -->
 
@@ -22,6 +25,9 @@
 
 >Noise in low-dose computed tomography (LDCT) can obscure important diagnostic details. While deep learning offers powerful denoising, supervised methods require impractical paired data, and self-supervised alternatives often use opaque, parameter-heavy networks that limit clinical trust. We propose Filter2Noise (F2N), a novel self-supervised framework for interpretable, zero-shot denoising from a single LDCT image. Instead of a black-box network, its core is an Attention-Guided Bilateral Filter, a transparent, content-aware mathematical operator. A lightweight attention module predicts spatially varying filter parameters, making the process transparent and allowing interactive radiologist control. To learn from a single image with correlated noise, we introduce a multi-scale self-supervised loss coupled with Euclidean Local Shuffle (ELS) to disrupt noise patterns while preserving anatomical integrity. On the Mayo Clinic LDCT Challenge, F2N achieves state-of-the-art results, outperforming competing zero-shot methods by up to 3.68 dB in PSNR. It accomplishes this with only 3.6k parameters, orders of magnitude fewer than competing models, which accelerates inference and simplifies deployment. By combining high performance with transparency, user control, and high parameter efficiency, F2N offers a trustworthy solution for LDCT enhancement. We further demonstrate its applicability by validating it on clinical photon-counting CT data.
 ## News
+
+📢 **2026-04**: Filter2Noise is now formally published in the *Journal of Medical Imaging*.
+[Paper](https://doi.org/10.1117/1.JMI.13.2.024004)
 
 📢 **2026-03**: We have added the code for our motion-aware extension of Filter2Noise for 4D CT denoising, featuring a Deformable Attention-Guided Joint Bilateral Filter (DA-JBF) with a self-supervised training strategy. See [`motion_aware_DAJBF/`](motion_aware_DAJBF/) for details.
 
@@ -120,14 +126,16 @@ L_\text{total} = L_\text{rec} + \lambda \cdot L_\text{reg}
 If you find this work useful in your research, please consider citing our paper:
 
 ```bibtex
-@misc{sun2025filter2noise,
-      title={Filter2Noise: Interpretable Self-Supervised Single-Image Denoising for Low-Dose CT with Attention-Guided Bilateral Filtering}, 
-      author={Yipeng Sun and Linda-Sophie Schneider and Mingxuan Gu and Siyuan Mei and Chengze Ye and Fabian Wagner and Siming Bayer and Andreas Maier},
-      year={2025},
-      eprint={2504.13519},
-      archivePrefix={arXiv},
-      primaryClass={eess.IV},
-      url={https://arxiv.org/abs/2504.13519}, 
+@article{sun2026filter2noise,
+  title   = {Filter2Noise: a framework for interpretable and zero-shot low-dose CT image denoising},
+  author  = {Sun, Yipeng and Schneider, Linda-Sophie and Mei, Siyuan and Wang, Jinhua and Hu, Ge and Gu, Mingxuan and Ye, Chengze and Wagner, Fabian and Song, Lan and Bayer, Siming and Maier, Andreas},
+  journal = {Journal of Medical Imaging},
+  volume  = {13},
+  number  = {2},
+  pages   = {024004},
+  year    = {2026},
+  doi     = {10.1117/1.JMI.13.2.024004},
+  url     = {https://doi.org/10.1117/1.JMI.13.2.024004}
 }
 ```
 
