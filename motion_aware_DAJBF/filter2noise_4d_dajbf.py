@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from loguru import logger
 from skimage.metrics import peak_signal_noise_ratio as psnr
-from skimage.metrics import structural_similarity as ssim
+from skimage.metrics import structural_similarity as _ssim
 
 import torch
 import torch.nn as nn
@@ -21,12 +21,23 @@ from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import Dataset, DataLoader
 
 TRAIN_FRACTION = 0.10
+HU_MIN, HU_MAX = -1024.0, 3071.0
+# Display only: lung WL=-600 HU, WW=1500 HU; metrics use the full fixed HU window.
+LUNG_WINDOW = dict(vmin=(-1350.0 - HU_MIN) / (HU_MAX - HU_MIN),
+                   vmax=(150.0 - HU_MIN) / (HU_MAX - HU_MIN))
 
 
 def to_np(t):
     if isinstance(t, torch.Tensor):
         return t.detach().cpu().float().numpy()
     return np.asarray(t)
+
+
+def ssim(clean, test, data_range=1.0):
+    """Manuscript SSIM: 11x11 Gaussian window and population covariance."""
+    return _ssim(clean, test, data_range=data_range, win_size=11,
+                 gaussian_weights=True, sigma=1.5, K1=0.01, K2=0.03,
+                 use_sample_covariance=False)
 
 
 class BoundedSoftplus(nn.Module):
@@ -37,7 +48,7 @@ class BoundedSoftplus(nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        return torch.clamp(F.softplus(x, beta=self.beta), max=self.threshold) + self.eps
+        return torch.clamp(F.softplus(x, beta=self.beta) + self.eps, max=self.threshold)
 
 
 class DeformableAttnBlock(nn.Module):
@@ -63,12 +74,15 @@ class DeformableAttnBlock(nn.Module):
         )
         self.register_buffer('base_offsets', torch.stack([ox.reshape(-1), oy.reshape(-1)], dim=-1))
 
-    def forward(self, x):
+    def forward(self, x, norm=None):
         B, C, H, W = x.shape
         K = self.num_points
 
         x_padded = F.pad(x, [1, 1, 1, 1], mode='reflect')
         params = self.param_conv(x_padded)
+        # Normalize sampling features after offset/logit projection, not before it.
+        if norm is not None:
+            x = norm(x)
 
         offsets = torch.tanh(params[:, :2 * K]) * self.max_offset
         attn_logits = params[:, 2 * K:]
@@ -107,15 +121,15 @@ class RMSNorm2d(nn.Module):
 
 
 class DLKASigmaPredictor(nn.Module):
-    def __init__(self, in_channels=4, hidden_dim=16, aux_drop_prob=0.5):
+    def __init__(self, in_channels=4, hidden_dim=16, aux_drop_prob=0.5, use_rmsnorm=True):
         super().__init__()
         self.aux_drop_prob = aux_drop_prob
         self.proj_main = nn.Conv2d(1, hidden_dim, 1)
         self.proj_aux = nn.Conv2d(in_channels - 1, hidden_dim, 1) if in_channels > 1 else None
-        self.norm1 = RMSNorm2d(hidden_dim)
+        self.norm1 = RMSNorm2d(hidden_dim) if use_rmsnorm else nn.Identity()
         self.attn_fine = DeformableAttnBlock(hidden_dim, num_points=25, spacing=1, max_offset=4.0)
         self.attn_coarse = DeformableAttnBlock(hidden_dim, num_points=25, spacing=3, max_offset=6.0)
-        self.norm2 = RMSNorm2d(hidden_dim)
+        self.norm2 = RMSNorm2d(hidden_dim) if use_rmsnorm else nn.Identity()
         self.gate_proj = nn.Conv2d(hidden_dim, hidden_dim, 1)
         self.proj_out = nn.Conv2d(hidden_dim, hidden_dim, 1)
         self.sigma_head = nn.Conv2d(hidden_dim, 3, 1)
@@ -133,9 +147,9 @@ class DLKASigmaPredictor(nn.Module):
     def forward(self, x):
         shortcut = self.proj_main(x[:, 0:1]) + self._aux_feat(x)
         feat = F.gelu(shortcut)
-        attn = self.attn_fine(self.norm1(feat))
-        attn = self.attn_coarse(attn)
-        attn = self.gate_proj(self.norm2(attn))
+        attn = self.attn_fine(feat, self.norm1)
+        attn = self.attn_coarse(attn, self.norm2)
+        attn = self.gate_proj(attn)
         gated = feat * attn
         out = self.proj_out(gated) + shortcut
         sigmas = self.activation(self.sigma_head(out))
@@ -144,7 +158,7 @@ class DLKASigmaPredictor(nn.Module):
 
 class DAGBF(nn.Module):
     def __init__(self, in_channels=4, hidden_dim=16,
-                 num_sample_points=25, max_offset=5.0, aux_drop_prob=0.5):
+                 num_sample_points=25, max_offset=5.0, aux_drop_prob=0.5, use_rmsnorm=True):
         super().__init__()
         self.num_sample_points = num_sample_points
         self.max_offset = max_offset
@@ -152,6 +166,7 @@ class DAGBF(nn.Module):
         self.sigma_predictor = DLKASigmaPredictor(
             in_channels=in_channels, hidden_dim=hidden_dim,
             aux_drop_prob=aux_drop_prob,
+            use_rmsnorm=use_rmsnorm,
         )
 
         self.offset_head = nn.Conv2d(hidden_dim, 2 * num_sample_points, 1)
@@ -190,6 +205,7 @@ class DAGBF(nn.Module):
         grid_y = (base_y + dy) / (H - 1) * 2 - 1
         grid = torch.stack([grid_x, grid_y], dim=-1).reshape(B * K, H, W, 2)
 
+        # Strict value isolation: auxiliary channels guide weights/offsets only.
         x_ch0 = x[:, 0:1]
         x_expanded = x_ch0.unsqueeze(1).expand(B, K, 1, H, W).reshape(B * K, 1, H, W)
         sampled = F.grid_sample(
@@ -230,7 +246,7 @@ class DAGBF(nn.Module):
 
 class DenoisingPipeline(nn.Module):
     def __init__(self, num_stages=1, in_channels=4,
-                 hidden_dim=16, num_sample_points=25, max_offset=5.0):
+                 hidden_dim=16, num_sample_points=25, max_offset=5.0, use_rmsnorm=True):
         super().__init__()
         self.stages = nn.ModuleList([
             DAGBF(
@@ -238,6 +254,7 @@ class DenoisingPipeline(nn.Module):
                 hidden_dim=hidden_dim,
                 num_sample_points=num_sample_points,
                 max_offset=max_offset,
+                use_rmsnorm=use_rmsnorm,
             )
             for _ in range(num_stages)
         ])
@@ -490,16 +507,21 @@ def setup_logger():
 
 
 def load_4d_volume(filepath):
+    """Read stored (D,H,W,T) volumes into the existing (H,W,D,T) layout."""
     with h5py.File(filepath, 'r') as f:
-        volume = np.transpose(f['volume'][:], (1, 2, 0, 3))
+        stored = f['volume'][:]
+        if stored.ndim != 4:
+            raise ValueError('Expected a volume dataset of shape (D,H,W,T)')
+        volume = np.transpose(stored, (1, 2, 0, 3))
     logger.info(f"Loaded 4D volume: {volume.shape}")
     return volume
 
 
 def normalize_volume(volume):
-    vmin, vmax = volume.min(), volume.max()
-    logger.info(f"Normalizing [{vmin:.3f}, {vmax:.3f}] -> [0, 1]")
-    return (volume - vmin) / (vmax - vmin)
+    """Use the same calibrated HU mapping for every scan; never per-volume min/max."""
+    logger.info(f"Clipping HU [{HU_MIN}, {HU_MAX}] -> [0, 1]")
+    volume = np.asarray(volume, dtype=np.float32)
+    return (np.clip(volume, HU_MIN, HU_MAX) - HU_MIN) / (HU_MAX - HU_MIN)
 
 
 def ensure_dir(path):
@@ -545,10 +567,17 @@ def compute_spatial_warps(volume, zt_indices, registration, device, batch_size=3
     return warped_z_minus, warped_z_plus
 
 
+def sobel_gradients(image):
+    kernel_x = image.new_tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).view(1, 1, 3, 3)
+    kernels = torch.cat([kernel_x, kernel_x.transpose(-2, -1)], dim=0)
+    return F.conv2d(F.pad(image, [1, 1, 1, 1], mode='reflect'), kernels)
+
+
 class RegularizedN2NLoss:
-    def __init__(self, gamma_max=2.0, n_epochs=100):
+    def __init__(self, gamma_max=2.0, n_epochs=100, edge_weight=0.0):
         self.gamma_max = gamma_max
         self.n_epochs = n_epochs
+        self.edge_weight = edge_weight
 
     def __call__(self, C_batch, D_batch, model, epoch):
         denoised_D = model(D_batch, output_channel=0)
@@ -560,12 +589,17 @@ class RegularizedN2NLoss:
         diff = denoised_D - target
         exp_diff = denoised_D.detach() - denoised_C_sg
 
-        gamma = epoch / self.n_epochs * self.gamma_max
+        gamma = min(epoch / max(1, self.n_epochs - 1), 1.0) * self.gamma_max
 
         loss_rec = F.l1_loss(denoised_D, target)
         loss_reg = gamma * torch.mean((diff - exp_diff) ** 2)
 
-        return loss_rec + loss_reg
+        loss = loss_rec + loss_reg
+        # Optional revision ablation; the primary objective excludes edge loss.
+        if self.edge_weight > 0:
+            loss = loss + self.edge_weight * F.l1_loss(
+                sobel_gradients(denoised_D), sobel_gradients(target))
+        return loss
 
 
 class TrainingPairDataset(Dataset):
@@ -580,23 +614,28 @@ class TrainingPairDataset(Dataset):
         return self.C[idx], self.D[idx]
 
 
+def motion_input(volume, motion_fields, z, t):
+    """Target values, warped previous/next guidance, displacement magnitude."""
+    return np.stack([volume[:, :, z, t], motion_fields['warped_prev'][(z, t)],
+                     motion_fields['warped_next'][(z, t)],
+                     motion_fields['motion_magnitude'][(z, t)]], axis=0)
+
+
 def create_training_pairs(volume, motion_fields, zt_indices):
     C_list, D_list = [], []
     wp = motion_fields['warped_prev']
     wn = motion_fields['warped_next']
-    mm = motion_fields['motion_magnitude']
 
     for z, t in zt_indices:
-        D_ch0 = volume[:, :, z, t]
-        warped_p, warped_n, motion_m = wp[(z, t)], wn[(z, t)], mm[(z, t)]
-        C_ch0 = 0.5 * (warped_p + warped_n)
-
-        C_list.append(np.stack([C_ch0, warped_p, warped_n, motion_m], axis=0))
-        D_list.append(np.stack([D_ch0, warped_p, warped_n, motion_m], axis=0))
+        D = motion_input(volume, motion_fields, z, t)
+        C = D.copy()
+        C[0] = 0.5 * (wp[(z, t)] + wn[(z, t)])
+        C_list.append(C)
+        D_list.append(D)
 
     C_tensor = torch.from_numpy(np.stack(C_list)).float()
     D_tensor = torch.from_numpy(np.stack(D_list)).float()
-    logger.info(f"Created {len(C_list)} training pairs ({TRAIN_FRACTION*100:.0f}% subset), "
+    logger.info(f"Created {len(C_list)} training pairs, "
                 f"tensor shape: {C_tensor.shape}")
     return TrainingPairDataset(C_tensor, D_tensor)
 
@@ -617,7 +656,7 @@ def train(model, dataset, loss_fn, optimizer, scheduler, device, epochs, batch_s
             D_batch = D_batch.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
                 loss = loss_fn(C_batch, D_batch, model, epoch)
             loss.backward()
             optimizer.step()
@@ -630,35 +669,52 @@ def train(model, dataset, loss_fn, optimizer, scheduler, device, epochs, batch_s
             logger.info(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss / n_batches:.6f}")
 
 
-def denoise_volume(model, volume, device):
+def denoise_volume(model, volume, device, motion_computer=None):
     model.eval()
     _, _, z_dim, t_dim = volume.shape
     result = np.zeros_like(volume)
+    motion_computer = motion_computer or MotionFieldComputer()
 
-    with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+    with torch.no_grad():
         for z in range(z_dim):
+            # Bound memory to one axial position instead of caching all 4D guidance.
+            fields = motion_computer.compute_for_indices(volume, device, [(z, t) for t in range(t_dim)])
             for t in range(t_dim):
-                inp = torch.from_numpy(volume[:, :, z, t]).float().unsqueeze(0).unsqueeze(0).to(device)
-                result[:, :, z, t] = to_np(model(inp).squeeze())
+                inp = torch.from_numpy(motion_input(volume, fields, z, t)).float().unsqueeze(0).to(device)
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
+                    result[:, :, z, t] = np.clip(to_np(model(inp).squeeze()), 0.0, 1.0)
 
     return result
 
 
 def compute_volume_metrics(clean, test, name="test"):
     z_dim, t_dim = clean.shape[2], clean.shape[3]
-    psnr_vals, ssim_vals, rmse_vals = [], [], []
+    psnr_vals, ssim_vals, rmse_vals, mse_vals = [], [], [], []
 
     for z in range(z_dim):
         for t in range(t_dim):
             cs, ts = clean[:, :, z, t], test[:, :, z, t]
             psnr_vals.append(psnr(cs, ts, data_range=1.0))
             ssim_vals.append(ssim(cs, ts, data_range=1.0))
-            rmse_vals.append(np.sqrt(np.mean((cs - ts) ** 2)))
+            mse = np.mean((cs.astype(np.float64) - ts) ** 2)
+            mse_vals.append(mse)
+            rmse_vals.append(np.sqrt(mse))
 
-    metrics = {'PSNR': np.mean(psnr_vals), 'SSIM': np.mean(ssim_vals), 'RMSE': np.mean(rmse_vals)}
+    metrics = {'PSNR': np.mean(psnr_vals), 'SSIM': np.mean(ssim_vals),
+               'RMSE': np.mean(rmse_vals), 'MSE': np.mean(mse_vals)}
     logger.info(f"{name.upper()} - PSNR: {metrics['PSNR']:.4f} dB, "
                 f"SSIM: {metrics['SSIM']:.6f}, RMSE: {metrics['RMSE']:.6f}")
     return metrics
+
+
+def compare_metrics(noisy, denoised):
+    """Report absolute dB gain and both geometric/arithmetic MSE reductions."""
+    if noisy['MSE'] <= 0:
+        raise ValueError('MSE reduction requires a positive noisy baseline MSE')
+    delta = denoised['PSNR'] - noisy['PSNR']
+    return {'delta_PSNR_dB': delta,
+            'PSNR_implied_MSE_reduction_percent': 100 * (1 - 10 ** (-delta / 10)),
+            'voxel_MSE_reduction_percent': 100 * (1 - denoised['MSE'] / noisy['MSE'])}
 
 
 def compute_per_slice_metrics(clean, test, name="test"):
@@ -735,7 +791,7 @@ def visualize_comparisons(clean, noisy, denoised, output_dir, num_slices=8):
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         fig.suptitle(f'z={z}, t={t_mid}', fontsize=16)
         for ax, data, title in zip(axes, [cs, ns, ds], ["Clean", "Noisy", "Denoised"]):
-            ax.imshow(data, cmap='gray', vmin=0, vmax=1)
+            ax.imshow(data, cmap='gray', **LUNG_WINDOW)
             ax.set_title(title)
             ax.axis('off')
         plt.tight_layout()
@@ -743,17 +799,20 @@ def visualize_comparisons(clean, noisy, denoised, output_dir, num_slices=8):
         plt.close(fig)
 
 
-def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir):
+def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir, motion_computer=None):
     sigma_dir = os.path.join(output_dir, 'sigma_maps')
     ensure_dir(sigma_dir)
     model.eval()
     z_dim, t_dim = noisy_vol.shape[2], noisy_vol.shape[3]
     t_mid = t_dim // 2
+    selected_z = np.linspace(0, z_dim - 1, 6, dtype=int)
+    motion_computer = motion_computer or MotionFieldComputer()
+    fields = motion_computer.compute_for_indices(noisy_vol, device, [(z, t_mid) for z in selected_z])
 
-    with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-        for z in np.linspace(0, z_dim - 1, 6, dtype=int):
+    with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=device.type == 'cuda'):
+        for z in selected_z:
             noisy_slice = noisy_vol[:, :, z, t_mid]
-            inp = torch.from_numpy(noisy_slice).float().unsqueeze(0).unsqueeze(0).to(device)
+            inp = torch.from_numpy(motion_input(noisy_vol, fields, z, t_mid)).float().unsqueeze(0).to(device)
 
             denoised_out, sigmas_list, offsets_list = model(inp, return_sigmas=True)
             denoised_slice = to_np(denoised_out.squeeze())
@@ -775,11 +834,11 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
 
             fig, axes = plt.subplots(2, 3, figsize=(18, 12))
             fig.suptitle(f'DA-JBF  z={z}, t={t_mid}', fontsize=16)
-            axes[0, 0].imshow(np.rot90(clean_slice, k=-1), cmap='gray', vmin=0, vmax=1)
+            axes[0, 0].imshow(np.rot90(clean_slice, k=-1), cmap='gray', **LUNG_WINDOW)
             axes[0, 0].set_title('Clean'); axes[0, 0].axis('off')
-            axes[0, 1].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', vmin=0, vmax=1)
+            axes[0, 1].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', **LUNG_WINDOW)
             axes[0, 1].set_title(f'Noisy PSNR={psnr_n:.2f} SSIM={ssim_n:.4f}'); axes[0, 1].axis('off')
-            axes[0, 2].imshow(np.rot90(denoised_slice, k=-1), cmap='gray', vmin=0, vmax=1)
+            axes[0, 2].imshow(np.rot90(denoised_slice, k=-1), cmap='gray', **LUNG_WINDOW)
             axes[0, 2].set_title(f'Denoised PSNR={psnr_d:.2f} SSIM={ssim_d:.4f}'); axes[0, 2].axis('off')
 
             im3 = axes[1, 0].imshow(np.rot90(np.abs(clean_slice - noisy_slice), k=-1),
@@ -802,7 +861,7 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
 
             fig, axes = plt.subplots(1, 4, figsize=(24, 5))
             fig.suptitle(f'DA-JBF Sigma Maps  z={z}, t={t_mid}', fontsize=14)
-            axes[0].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', vmin=0, vmax=1)
+            axes[0].imshow(np.rot90(noisy_slice, k=-1), cmap='gray', **LUNG_WINDOW)
             axes[0].set_title('Input (Noisy)'); axes[0].axis('off')
             for ax, data, label in zip(axes[1:], [sx, sy, sr],
                                        ['Sigma_x', 'Sigma_y', 'Sigma_r']):
@@ -866,18 +925,23 @@ def visualize_sigma_and_offsets(model, clean_vol, noisy_vol, device, output_dir)
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="Motion-aware DA-JBF for 4D CT denoising")
-    parser.add_argument('--clean', type=str, required=True, help='Path to clean 4D volume (HDF5)')
+    parser.add_argument('--clean', type=str, help='Optional clean HU volume (HDF5), used only for evaluation')
     parser.add_argument('--noisy', type=str, required=True, help='Path to noisy 4D volume (HDF5)')
     parser.add_argument('--output', type=str, default='denoised_4d.h5', help='Output denoised volume path')
     parser.add_argument('--output-dir', type=str, default='output_4d', help='Output directory for figures and metrics')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=16)
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--weight-decay', type=float, default=0.01)
+    parser.add_argument('--lr', type=float, default=0.003)
+    parser.add_argument('--weight-decay', type=float, default=0.0001)
     parser.add_argument('--gamma-max', type=float, default=2.0)
+    parser.add_argument('--edge-weight', type=float, default=0.0, help='Optional Sobel edge-loss weight; primary loss uses 0')
+    parser.add_argument('--no-rmsnorm', action='store_true', help='Disable RMSNorm for the revision ablation')
     parser.add_argument('--train-fraction', type=float, default=TRAIN_FRACTION)
-    parser.add_argument('--seed', type=int, default=77)
-    return parser.parse_args()
+    parser.add_argument('--seed', type=int, default=42)
+    args = parser.parse_args()
+    if args.epochs < 1 or args.batch_size < 1 or not 0 < args.train_fraction <= 1 or args.edge_weight < 0:
+        parser.error('epochs/batch-size must be positive, train-fraction in (0,1], and edge-weight nonnegative')
+    return args
 
 
 def main():
@@ -904,20 +968,23 @@ def main():
     logger.info("DA-JBF (Deformable Attention-Guided Joint Bilateral Filter) for 4D CT")
     logger.info(f"Training on {train_fraction*100:.0f}% of data")
 
-    if not os.path.exists(clean_path) or not os.path.exists(noisy_path):
-        logger.error("Missing input files.")
-        return
+    if not os.path.exists(noisy_path) or (clean_path and not os.path.exists(clean_path)):
+        raise FileNotFoundError('Missing noisy input or requested clean evaluation reference')
 
-    clean_volume = normalize_volume(load_4d_volume(clean_path))
+    clean_volume = normalize_volume(load_4d_volume(clean_path)) if clean_path else None
     noisy_volume = normalize_volume(load_4d_volume(noisy_path))
     _, _, z_dim, t_dim = noisy_volume.shape
+    if t_dim < 3:
+        raise ValueError('Temporal morphing training requires at least three frames')
+    if clean_volume is not None and clean_volume.shape != noisy_volume.shape:
+        raise ValueError('Clean reference and noisy input must have identical shapes')
 
     mfc = MotionFieldComputer(**reg_config)
 
     all_valid_zt = [(z, t) for z in range(z_dim) for t in range(1, t_dim - 1)]
     n_total = len(all_valid_zt)
     n_train = max(1, int(n_total * train_fraction))
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(args.seed)
     train_zt = [all_valid_zt[i] for i in rng.choice(n_total, size=n_train, replace=False)]
     logger.info(f"Selected {n_train}/{n_total} (z,t) pairs for training")
 
@@ -932,6 +999,7 @@ def main():
     model = DenoisingPipeline(
         num_stages=1, in_channels=4, hidden_dim=16,
         num_sample_points=25, max_offset=5.0,
+        use_rmsnorm=not args.no_rmsnorm,
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -939,8 +1007,8 @@ def main():
 
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     steps_per_epoch = math.ceil(len(dataset) / batch_size)
-    scheduler = OneCycleLR(optimizer, max_lr=lr, epochs=epochs, steps_per_epoch=steps_per_epoch)
-    loss_fn = RegularizedN2NLoss(gamma_max=gamma_max, n_epochs=epochs)
+    scheduler = OneCycleLR(optimizer, max_lr=lr, epochs=epochs, steps_per_epoch=steps_per_epoch, pct_start=0.3)
+    loss_fn = RegularizedN2NLoss(gamma_max=gamma_max, n_epochs=epochs, edge_weight=args.edge_weight)
 
     train_start = time.time()
     train(model, dataset, loss_fn, optimizer, scheduler, device, epochs, batch_size)
@@ -948,12 +1016,22 @@ def main():
     logger.info(f"Training: {train_time:.2f}s")
     del dataset
 
-    logger.info("Denoising full 4D volume (1-channel inference)...")
-    denoised_volume = denoise_volume(model, noisy_volume, device)
+    logger.info("Denoising full 4D volume with motion-compensated auxiliary guidance...")
+    denoised_volume = denoise_volume(model, noisy_volume, device, mfc)
 
     with h5py.File(output_path, 'w') as f:
-        f.create_dataset('volume', data=denoised_volume, compression='gzip', compression_opts=9)
-        f.attrs['original_shape'] = clean_volume.shape
+        # Preserve the input file's axis order and calibrated intensity units.
+        output_hu = np.transpose(denoised_volume * (HU_MAX - HU_MIN) + HU_MIN, (2, 0, 1, 3))
+        f.create_dataset('volume', data=output_hu, compression='gzip', compression_opts=9)
+        f.attrs['original_shape'] = output_hu.shape
+        f.attrs['axis_order'] = 'D,H,W,T'
+        f.attrs['intensity_units'] = 'HU'
+        f.attrs['normalization_hu_min'] = HU_MIN
+        f.attrs['normalization_hu_max'] = HU_MAX
+
+    if clean_volume is None:
+        logger.info('Saved denoised HU volume; no clean reference supplied for evaluation.')
+        return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(output_figures, f"run_{timestamp}")
@@ -962,6 +1040,9 @@ def main():
     logger.info("Computing metrics...")
     noisy_4d = compute_volume_metrics(clean_volume, noisy_volume, "noisy")
     denoised_4d = compute_volume_metrics(clean_volume, denoised_volume, "denoised")
+    # Tables 1-3 use T00; fraction/ablation studies use the complete 4D sequence.
+    noisy_t00 = compute_volume_metrics(clean_volume[..., :1], noisy_volume[..., :1], "noisy T00")
+    denoised_t00 = compute_volume_metrics(clean_volume[..., :1], denoised_volume[..., :1], "denoised T00")
     noisy_per_slice = compute_per_slice_metrics(clean_volume, noisy_volume, "noisy")
     denoised_per_slice = compute_per_slice_metrics(clean_volume, denoised_volume, "denoised")
 
@@ -970,8 +1051,13 @@ def main():
 
     with open(os.path.join(metrics_dir, 'overall_metrics.txt'), 'w') as f:
         f.write(f"DA-JBF gamma={gamma_max} - {train_fraction*100:.0f}% training\n{'='*60}\n\n")
-        for label, m in [("NOISY", noisy_4d), ("DENOISED", denoised_4d)]:
-            f.write(f"{label}: PSNR={m['PSNR']:.4f} dB, SSIM={m['SSIM']:.6f}, RMSE={m['RMSE']:.6f}\n")
+        for scope, noisy_m, denoised_m in [("T00", noisy_t00, denoised_t00), ("FULL_4D", noisy_4d, denoised_4d)]:
+            f.write(f"\n{scope}\n")
+            for label, m in [("NOISY", noisy_m), ("DENOISED", denoised_m)]:
+                f.write(f"{label}: PSNR={m['PSNR']:.4f} dB, SSIM={m['SSIM']:.6f}, "
+                        f"RMSE={m['RMSE']:.6f}, MSE={m['MSE']:.8g}\n")
+            for key, value in compare_metrics(noisy_m, denoised_m).items():
+                f.write(f"{key}={value:.6f}\n")
         f.write(f"\nMotion time: {motion_time:.2f}s\nTraining time: {train_time:.2f}s\n")
 
     np.save(os.path.join(metrics_dir, 'noisy_4d_metrics.npy'), noisy_4d)
@@ -982,7 +1068,7 @@ def main():
     plot_metrics_heatmaps(denoised_per_slice, metrics_dir, 'denoised', 'Denoised Volume')
 
     visualize_comparisons(clean_volume, noisy_volume, denoised_volume, run_dir, num_slices=8)
-    visualize_sigma_and_offsets(model, clean_volume, noisy_volume, device, run_dir)
+    visualize_sigma_and_offsets(model, clean_volume, noisy_volume, device, run_dir, mfc)
 
     logger.info("Done!")
 
